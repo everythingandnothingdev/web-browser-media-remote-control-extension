@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+            }
+            h2 {
+                font-size: 1.2rem;
+                font-weight: normal;
+                margin: 1rem 0 0.5rem;
+            }
+            .alert-warning {
+                position: relative;
+                padding: .75rem 1.25rem;
+                margin-bottom: 1rem;
+                border: 1px solid transparent;
+                border-radius: .25rem;
+                color: #856404;
+                background-color: #fff3cd;
+                border-color: #ffeeba;
+                line-height: 1.4rem;
+            }
+            .alert-warning a {
+                color: #644d08;
+                text-decoration: underline;
+            }
+            .alert-warning p {
+                margin: .75rem 0;
+            }
+            .alert-warning ul {
+                margin: 0.2rem 0;
+                padding: 0 0 0 2rem;
+            }
+            .alert-warning p + ul {
+                margin-top: -0.5rem;
+            }
+            .alert-warning p:first-child {
+                margin-top: 0;
+            }
+            .extension-form {
+                display: block;
+                max-width: 30rem;
+                margin: 0 auto;
+                padding: 1rem;
+            }
+            .extension-form * {
+                box-sizing: border-box;
+            }
+            .extension-form label {
+                font-size: 1rem;
+                display: flex;
+                align-items: center;
+                margin: 0 0 .5rem 0;
+            }
+            .extension-form label .label-text {
+                display: inline-block;
+                width: 7rem;
+            }
+            .extension-form label input,
+            .extension-form label select {
+                font-size: 1rem;
+                display: inline-block;
+                flex-grow: 1;
+                height: 2.2rem;
+                border: 1px solid #ccc;
+                border-radius: .3rem;
+                padding: 0 0.5rem;
+            }
+            .extension-form button {
+                font-size: 1rem;
+                background: #efeff2;
+                box-shadow: 0 .1rem #ccc;
+                border: none;
+                border-radius: .3rem;
+                padding: 0 1rem;
+                height: 2.2rem;
+                cursor: pointer;
+            }
+            .extension-form button:active {
+                background: #dfdfe5;
+                box-shadow: 0 .05rem #ccc;
+                transform: translateY(.05rem);
+            }
+            .extension-form button:hover {
+                background: #dfdfe5;
+            }
+            .button-full {
+                text-align: center;
+                width: 100%;
+            }
+            .form-loader {
+                text-align: center;
+            }
+            .lds-dual-ring {
+                display: inline-block;
+                width: 2rem;
+                height: 2rem;
+                margin: .5rem;
+            }
+            .lds-dual-ring:after {
+                content: " ";
+                display: block;
+                width: 1.2rem;
+                height: 1.2rem;
+                padding: .2rem;
+                border-radius: 50%;
+                border: .2rem solid #333;
+                border-color: #333 transparent #333 transparent;
+                animation: lds-dual-ring 1.2s linear infinite;
+            }
+            .mqtt-status {
+                display: flex;
+                align-items: center;
+                font-size: 1rem;
+                border: .3rem solid #f2f2f2;
+                border-radius: .3rem;
+            }
+            .mqtt-status .lds-dual-ring {
+                margin-right: 1rem;
+            }
+            .mqtt-status .status-icon-connected,
+            .mqtt-status .status-icon-error,
+            .mqtt-status .status-icon-neutral {
+                width: 1.5rem;
+                height: 1.5rem;
+                margin: .75rem;
+                margin-right: 1.25rem;
+                border: .3rem solid #94d71d;
+                border-radius: 10rem;
+            }
+            .mqtt-status .status-icon-error {
+                border: .3rem solid #f41b30;
+            }
+            .mqtt-status .status-icon-neutral {
+                border: .3rem solid #ccc;
+            }
+            @keyframes lds-dual-ring {
+                0% {
+                    transform: rotate(0deg);
+                }
+                100% {
+                    transform: rotate(360deg);
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <form id="form" action="javascript:void(0)" class="extension-form">
+            <div class="alert-warning">
+                <p>This extension requires you to to set up a <strong>MQTT Broker</strong> so it can communicate with the corresponding <strong>Web Browser Media Remote Control</strong> app on your phone.</p>
+                <p>This <strong>MQTT Broker</strong> can be installed on one of your computers which always stays on, or you can use a cloud service.</p>
+                <p>Some options:</p>
+                <ul>
+                    <li><a href="https://www.home-assistant.io/" target="_blank">Home Assistant</a> with the <a href="https://github.com/home-assistant/addons/blob/master/mosquitto/DOCS.md" target="_blank">Mosquitto Broker Addon</a> installed.</li>
+                    <li><a href="https://mosquitto.org/" target="_blank">Eclipse Mosquitto (standalone)</a></li>
+                    <li>Cloud hosted MQTT brokers such as <a href="https://www.cloudmqtt.com/" target="_blank">https://www.cloudmqtt.com/</a></li>
+                </ul>
+            </div>
+            <h2>MQTT Connection Status</h2>
+            <div id="mqttStatus" class="mqtt-status">
+                <div class="lds-dual-ring"></div> <span>Checking...</span>
+            </div>
+            <h2>MQTT Settings</h2>
+            <div id="mqttSettingsLoader" class="form-loader">
+                <div class="lds-dual-ring"></div>
+            </div>
+            <div id="mqttSettingsInputs">
+                <label><span class="label-text">Protocol</span>
+                    <select id="mqttProtocol">
+                        <option value="ws://">ws://</option>
+                        <option value="wss://">wss://</option>
+                    </select>
+                </label>
+                <label><span class="label-text">Host</span><input id="mqttHost" type="text" placeholder="example: 192.168.1.10"></label>
+                <label><span class="label-text">Port</span><input id="mqttPort" type="text" placeholder="example: 1884"></label>
+                <label><span class="label-text">Username</span><input id="mqttUsername" type="text"></label>
+                <label><span class="label-text">Password</span><input id="mqttPassword" type="password"></label>
+                <label><span class="label-text">Topic Prefix</span><input id="mqttTopicPrefix" type="text"></label>
+                <button class="button-full" type="submit">Save</button>
+            </div>
+        </form>
+        <script src="options.js"></script>
+    </body>
+</html>

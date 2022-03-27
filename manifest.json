@@ -1,0 +1,29 @@
+{
+    "description": "Adds a page action to toggle applying CSS to pages.",
+    "manifest_version": 2,
+    "name": "Web Browser Media Remote Control",
+    "version": "1.0",
+    "homepage_url": "https://github.com/browser-media-remote-control-extension/tree/master/",
+    "background": {
+        "scripts": ["browser-polyfill.js", "mqtt.min.js", "background.js"]
+    },
+    "content_scripts": [
+        {
+            "matches": ["*://*/*"],
+            "js": ["page-controller.js"]
+        }
+    ],
+    "options_ui": {
+        "page": "options.html"
+    },
+    "permissions": [
+        "storage",
+        "activeTab",
+        "tabs"
+    ],
+    "browser_specific_settings": {
+        "gecko": {
+            "id": "browserRemoteControl@mozilla.com"
+        }
+    }
+}

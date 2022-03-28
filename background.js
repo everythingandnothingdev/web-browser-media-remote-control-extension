@@ -12,14 +12,26 @@ let mqttConfig = {
 
 let openedTabs = [];
 
+function sendTabList() {
+    if (mqttClient) {
+        console.log(consolePrefix() + mqttConfig.topicPrefix + '/tabs/list', JSON.stringify(openedTabs));
+        mqttClient.publish(mqttConfig.topicPrefix + '/tabs/list', JSON.stringify(openedTabs));
+    }
+}
+
 browser.runtime.onMessage.addListener(
     (request, sender, sendResponse) => {
         if (request.topic === 'mqttConfigUpdate') {
             mqttConnect(request.data);
         } else if (request.topic === 'mqttSend') {
             if (mqttClient) {
+                console.log(consolePrefix() + mqttConfig.topicPrefix + '/' + request.mqtt?.topic, JSON.stringify(request.mqtt?.message));
                 mqttClient.publish(mqttConfig.topicPrefix + '/' + request.mqtt?.topic, JSON.stringify(request.mqtt?.message));
             }
+        } else if (request.topic === 'sendMessageToCurrentTab') {
+            browser.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                browser.tabs.sendMessage(tabs[0].id, request.message);
+            });
         }
     }
 );
@@ -37,9 +49,8 @@ browser.tabs.onActivated.addListener(
             rebuildTabList();
             return;
         }
-        if (mqttClient) {
-            mqttClient.publish(mqttConfig.topicPrefix + '/tabs/list', JSON.stringify(openedTabs));
-        }
+        console.log('activated');
+        sendTabList();
     }
 );
 browser.tabs.onCreated.addListener(
@@ -53,9 +64,8 @@ browser.tabs.onCreated.addListener(
                 title: newTab.title
             });
         }
-        if (mqttClient) {
-            mqttClient.publish(mqttConfig.topicPrefix + '/tabs/list', JSON.stringify(openedTabs));
-        }
+        console.log('created');
+        sendTabList();
     }
 );
 browser.tabs.onRemoved.addListener(
@@ -64,9 +74,8 @@ browser.tabs.onRemoved.addListener(
         if (existingTabIndex > -1) {
             openedTabs.splice(existingTabIndex, 1);
         }
-        if (mqttClient) {
-            mqttClient.publish(mqttConfig.topicPrefix + '/tabs/list', JSON.stringify(openedTabs));
-        }
+        console.log('removed');
+        sendTabList();
     }
 );
 browser.tabs.onUpdated.addListener(
@@ -84,9 +93,8 @@ browser.tabs.onUpdated.addListener(
             existingTab.url = tab.url;
             existingTab.title = tab.title;
         }
-        if (mqttClient) {
-            mqttClient.publish(mqttConfig.topicPrefix + '/tabs/list', JSON.stringify(openedTabs));
-        }
+        console.log('updated');
+        sendTabList();
     }
 );
 async function rebuildTabList() {
@@ -101,9 +109,8 @@ async function rebuildTabList() {
                     title: tab.title
                 });
             }
-            if (mqttClient) {
-                mqttClient.publish(mqttConfig.topicPrefix + '/tabs/list', JSON.stringify(openedTabs));
-            }
+            console.log('reubild');
+            sendTabList();
         });
     });
 }
@@ -155,10 +162,11 @@ function urlify(url) {
     return url;
 }
 
-function mqttConnect(mqttConfig) {
+async function mqttConnect(mqttConfig) {
+    notifyMqttStatus('disconnected');
     if (mqttClient) {
         console.log(consolePrefix() + 'Ending current MQTT client.');
-        mqttClient.end();
+        await mqttClient.end();
     }
     notifyMqttStatus('connecting');
     mqttClient = mqtt.connect(mqttConfig.protocol + mqttConfig.host, { 
@@ -201,6 +209,7 @@ function mqttConnect(mqttConfig) {
         message = JSON.parse(message);
 
         if (topic === 'tabs/requestList') {
+            console.log(consolePrefix() + mqttConfig.topicPrefix + '/tabs/list', JSON.stringify(openedTabs));
             mqttClient.publish(mqttConfig.topicPrefix + '/tabs/list', JSON.stringify(openedTabs));
         } else if (topic === 'tabs/activate') {
             browser.tabs.update(message.id, { active: true });

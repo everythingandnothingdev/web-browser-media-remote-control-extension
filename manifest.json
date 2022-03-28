@@ -10,7 +10,8 @@
     "content_scripts": [
         {
             "matches": ["*://*/*"],
-            "js": ["page-controller.js"]
+            "js": ["page-controller.js"],
+            "all_frames": true
         }
     ],
     "options_ui": {

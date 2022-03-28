@@ -44,8 +44,25 @@ function addCss(css) {
     return style;
 };
 
+async function sendMessageToCurrentTab(message) {
+    browser.runtime.sendMessage({
+        topic: 'sendMessageToCurrentTab',
+        message
+    });
+}
+
+let iframeId = null;
+window.addEventListener('message', (event) => {
+    try {
+        const data = JSON.parse(event.data);
+        if (data.WEB_BROWSER_MEDIA_REMOTE_CONTROL_IFRAME_ID != null) {
+            iframeId = data.WEB_BROWSER_MEDIA_REMOTE_CONTROL_IFRAME_ID;
+        }
+    } catch (error) {}
+});
+
 browser.runtime.onMessage.addListener(
-    function(request, sender, sendResponse) {
+    async function(request, sender, sendResponse) {
         if (request.topic === 'mqttReceive') {
             if (request.mqtt.topic === 'scrollController') {
                 onScrollControllerChange(request.mqtt.message);
@@ -63,6 +80,31 @@ browser.runtime.onMessage.addListener(
                 onTogglePrimaryVideoSeekBackward(request.mqtt.message);
             } else if (/tabs\/zoom(In|Out)/g.test(request.mqtt.topic)) {
                 document.getElementById('WEB_BROWSER_MEDIA_REMOTE_CONTROL_FOCUS_RECT')?.remove();
+            }
+        } else if (request.topic === 'iframeVideoSearchRequest') {
+            const primaryVideoInfo = getPrimaryVideoInfo();
+            if (primaryVideoInfo.video) {
+                await sendMessageToCurrentTab({
+                    topic: 'iframeVideoSearchResponse',
+                    message: {
+                        id: iframeId,
+                        frameUrl: window.location.href,
+                        videoSize: primaryVideoInfo.size,
+                        videoPaused: primaryVideoInfo.video.paused
+                    }
+                });
+            }
+        } else if (request.topic === 'iframeVideoSearchResponse') {
+            iframeVideoCandidates.push(request.message);
+        } else if (request.topic === 'iframeEmbeddedCall') {
+            if (request.message.id === iframeId) {
+                if (request.message.handler === 'onHandleTogglePrimaryVideoPlay') {
+                    onHandleTogglePrimaryVideoPlay();
+                } else if (request.message.handler === 'onHandleTogglePrimaryVideoSeekForward') {
+                    onHandleTogglePrimaryVideoSeekForward(request.message.args);
+                } else if (request.message.handler === 'onTogglePrimaryVideoSeekBackward') {
+                    onTogglePrimaryVideoSeekBackward(request.message.args);
+                }
             }
         }
     }
@@ -92,6 +134,8 @@ let lastPageScrollAnimateTime = 0;
 let isAnimatingPageScroll = false;
 
 function onScrollControllerChange(message) {
+    if (window.top !== window) return;
+
     if (pageScrollControllerState !== 'preview' && message.state === 'preview') {
         pageScrollStartScrollLeft = pageScrollElement.scrollLeft;
         pageScrollStartScrollTop = pageScrollElement.scrollTop;
@@ -117,6 +161,8 @@ function onScrollControllerChange(message) {
 }
 
 function scrollAnimate() {
+    if (window.top !== window) return;
+
     let delta = window.performance.now() - lastPageScrollAnimateTime;
     lastPageScrollAnimateTime = window.performance.now();
     if (pageScrollControllerState === 'committed') {
@@ -156,6 +202,8 @@ const DIRECTION_DOWN = 2;
 const DIRECTION_LEFT = 3;
 
 function focusScreenCenter() {
+    if (window.top !== window) return;
+
     const centerX = window.innerWidth / 2;
     const centerY = window.innerHeight / 2;
 
@@ -181,6 +229,7 @@ function focusScreenCenter() {
 }
 
 function focusElementInDirection(direction) {
+    if (window.top !== window) return;
 
     let closestDirectElement = null;
     let closestIndirectElement = null;
@@ -304,6 +353,8 @@ function focusElementInDirection(direction) {
 }
 
 function activateActiveElement() {
+    if (window.top !== window) return;
+
     document.getElementById('WEB_BROWSER_MEDIA_REMOTE_CONTROL_FOCUS_RECT')?.remove();
     if (document.activeElement) {
         document.activeElement.click();
@@ -311,6 +362,8 @@ function activateActiveElement() {
 }
 
 function onFocusControllerChange(message) {
+    if (window.top !== window) return;
+
     if (message.activate) {
         activateActiveElement();
     } else if (message.move) {
@@ -327,12 +380,15 @@ function onFocusControllerChange(message) {
  * Video control
  */
 
+let hasPlayedVideoMap = new WeakMap();
+let iframeVideoCandidates = [];
 let fullscreenVideoContainer = null;
 let currentFullscreenVideoElement = null;
 let fullscreenVideoOldStyles = null;
 let fullscreenVideoPlaceholder = null;
+let fullscreenVideoMutationObserver = null;
 
-function getPrimaryVideo() {
+function getPrimaryVideoInfo() {
     let largestElement = null;
     let largestSize = -1;
 
@@ -355,32 +411,119 @@ function getPrimaryVideo() {
             }
         }
     });
-
-    return largestElement;
+    return {
+        video: largestElement,
+        size: largestSize
+    };
 }
 
-function onRequestPrimaryVideoInfo() {
-    const primaryVideo = getPrimaryVideo();
+async function searchForPrimaryVideoAcrossFrames() {
+    if (window != window.top) return;
+    iframeVideoCandidates = [];
+
+    const iframes = document.querySelectorAll('iframe');
+
+    iframes.forEach((iframe, i) => {
+        iframe.contentWindow.postMessage(JSON.stringify({
+            WEB_BROWSER_MEDIA_REMOTE_CONTROL_IFRAME_ID: i
+        }), '*');
+    });
+    await sendMessageToCurrentTab({
+        topic: 'iframeVideoSearchRequest'
+    });
+    await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+    });
+    let largestFrame = null;
+    let largestFrameElement = null;
+    let largestSize = -1;
+    let largestIsPaused = true;
+
+    const topPrimaryVideoInfo = getPrimaryVideoInfo();
+    if (topPrimaryVideoInfo.video) {
+        largestFrame = 'top';
+        largestSize = topPrimaryVideoInfo.size;
+        largestIsPaused = topPrimaryVideoInfo.video.paused;
+    }
+
+    iframes.forEach((iframe, i) => {
+        const iframeInfo = iframeVideoCandidates.filter(frameInfo => frameInfo.id === i)[0];
+        if (iframeInfo) {
+            const iframeRect = iframe.getBoundingClientRect();
+            const onscreenWidth = iframeRect.width + Math.min(iframeRect.left, 0) + Math.min(window.innerWidth - iframeRect.right, 0);
+            const onscreenHeight = iframeRect.height + Math.min(iframeRect.top, 0) + Math.min(window.innerHeight - iframeRect.bottom, 0);
+            const size = onscreenWidth * onscreenHeight;
+            if (size > largestSize) {
+                largestFrame = iframeInfo.id;
+                largestFrameElement = iframe;
+                largestSize = size;
+                largestIsPaused = iframeInfo.videoPaused;
+            }
+        }
+    });
+
+    const result = {
+        frame: largestFrame,
+        frameElement: largestFrameElement,
+        paused: largestIsPaused
+    };
+
+    return result;
+}
+
+async function onRequestPrimaryVideoInfo() {
+    if (window != window.top) return;
+
+    const videoInfo = await searchForPrimaryVideoAcrossFrames();
     browser.runtime.sendMessage({
         topic: 'mqttSend',
         mqtt: {
             topic: 'primaryVideo/info',
             message: {
-                exists: !!primaryVideo,
-                paused: primaryVideo?.paused
+                exists: videoInfo.frame != null,
+                paused: videoInfo.paused
             }
         }
     });
 }
 
-function onTogglePrimaryVideoPlay() {
-    const primaryVideo = getPrimaryVideo();
+async function onTogglePrimaryVideoPlay() {
+    if (window != window.top) return;
+    const videoInfo = await searchForPrimaryVideoAcrossFrames();
+    if (videoInfo.frame == null) return;
+    if (videoInfo.frame === 'top') {
+        onHandleTogglePrimaryVideoPlay();
+    } else {
+        await sendMessageToCurrentTab({
+            topic: 'iframeEmbeddedCall',
+            message: {
+                id: videoInfo.frame,
+                handler: 'onHandleTogglePrimaryVideoPlay'
+            }
+        });
+    }
+}
+
+function onHandleTogglePrimaryVideoPlay() {
+    const primaryVideo = getPrimaryVideoInfo().video;
     if (primaryVideo) {
-        if (primaryVideo.paused) {
-            HTMLVideoElement.prototype.play.call(primaryVideo);
+        if (window.location.href.includes('youtube.com/embed/')) {
+            document.querySelector('button.ytp-button[aria-label="Play"]').click()
         } else {
-            HTMLVideoElement.prototype.pause.call(primaryVideo);
+            if (!primaryVideo.hasAttribute('data-web-browser-media-remote-control-has-played-once') && primaryVideo.classList.contains('jw-video')) {
+                const jwplayer = primaryVideo.closest('.jwplayer') || document.querySelector('.jwplayer');
+                console.log(jwplayer);
+                console.log(jwplayer.querySelector('[role="button"][aria-label="Play"]'));
+                jwplayer.querySelector('[role="button"][aria-label="Play"]').click();
+            } else {
+                if (primaryVideo.paused) {
+                    HTMLVideoElement.prototype.play.call(primaryVideo);
+                } else {
+                    HTMLVideoElement.prototype.pause.call(primaryVideo);
+                }
+            }
         }
+        primaryVideo.setAttribute('data-web-browser-media-remote-control-has-played-once', true);
         browser.runtime.sendMessage({
             topic: 'mqttSend',
             mqtt: {
@@ -394,21 +537,79 @@ function onTogglePrimaryVideoPlay() {
     }
 }
 
-function onTogglePrimaryVideoSeekForward(message) {
-    const primaryVideo = getPrimaryVideo();
-    if (primaryVideo) {
-        primaryVideo.currentTime += (message?.ms || 5000) / 1000;
+async function onTogglePrimaryVideoSeekForward(message) {
+    if (window != window.top) return;
+    
+    const videoInfo = await searchForPrimaryVideoAcrossFrames();
+    if (videoInfo.frame == null) return;
+    if (videoInfo.frame === 'top') {
+        onHandleTogglePrimaryVideoSeekForward(message);
+    } else {
+        await sendMessageToCurrentTab({
+            topic: 'iframeEmbeddedCall',
+            message: {
+                id: videoInfo.frame,
+                handler: 'onHandleTogglePrimaryVideoSeekForward',
+                args: message
+            }
+        });
     }
 }
 
-function onTogglePrimaryVideoSeekBackward(message) {
-    const primaryVideo = getPrimaryVideo();
+function onHandleTogglePrimaryVideoSeekForward(message) {
+    const primaryVideo = getPrimaryVideoInfo().video;
     if (primaryVideo) {
-        primaryVideo.currentTime -= (message?.ms || 5000) / 1000;
+        if (window.location.host.includes('netflix.com')) {
+            document.querySelector('button[aria-label="Seek Forward"]').click();
+        } else {
+            primaryVideo.currentTime += (message?.ms || 5000) / 1000;
+        }
     }
 }
 
-function onTogglePrimaryVideoFullscreen() {
+async function onTogglePrimaryVideoSeekBackward(message) {
+    if (window != window.top) return;
+    
+    const videoInfo = await searchForPrimaryVideoAcrossFrames();
+    if (videoInfo.frame == null) return;
+    if (videoInfo.frame === 'top') {
+        onHandleTogglePrimaryVideoSeekBackward(message);
+    } else {
+        await sendMessageToCurrentTab({
+            topic: 'iframeEmbeddedCall',
+            message: {
+                id: videoInfo.frame,
+                handler: 'onHandleTogglePrimaryVideoSeekBackward',
+                args: message
+            }
+        });
+    }
+}
+
+function onHandleTogglePrimaryVideoSeekBackward(message) {
+    const primaryVideo = getPrimaryVideoInfo().video;
+    if (primaryVideo) {
+        if (window.location.host.includes('netflix.com')) {
+            document.querySelector('button[aria-label="Seek Back"]').click();
+        } else {
+            primaryVideo.currentTime -= (message?.ms || 5000) / 1000;
+        }
+    }
+}
+
+async function onTogglePrimaryVideoFullscreen() {
+    if (window != window.top) return;
+
+    const videoInfo = await searchForPrimaryVideoAcrossFrames();
+    if (videoInfo.frame == null) return;
+    if (videoInfo.frame === 'top') {
+        onHandleTogglePrimaryVideoFullscreen(getPrimaryVideoInfo().video);
+    } else if (videoInfo.frameElement) {
+        onHandleTogglePrimaryVideoFullscreen(videoInfo.frameElement);
+    }
+}
+
+function onHandleTogglePrimaryVideoFullscreen(primaryVideo) {
     document.getElementById('WEB_BROWSER_MEDIA_REMOTE_CONTROL_FULLSCREEN_VIDEO_CONTAINER')?.remove();
     if (currentFullscreenVideoElement) {
         document.documentElement.classList.remove('WEB_BROWSER_MEDIA_REMOTE_CONTROL_IS_FULLSCREEN');
@@ -419,8 +620,11 @@ function onTogglePrimaryVideoFullscreen() {
         currentFullscreenVideoElement = null;
         fullscreenVideoPlaceholder = null;
         fullscreenVideoContainer = null;
+        if (fullscreenVideoMutationObserver) {
+            fullscreenVideoMutationObserver.disconnect();
+            fullscreenVideoMutationObserver = null;
+        }
     } else {
-        const primaryVideo = getPrimaryVideo();
         if (primaryVideo) {
             try {
                 fullscreenVideoContainer = document.createElement('div');
@@ -431,10 +635,24 @@ function onTogglePrimaryVideoFullscreen() {
                 fullscreenVideoPlaceholder = document.createComment('');
                 primaryVideo.after(fullscreenVideoPlaceholder);
                 fullscreenVideoOldStyles = primaryVideo.getAttribute('style');
-                primaryVideo.style = 'display: block; position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%;';
+                primaryVideo.style = '';
                 fullscreenVideoContainer.append(primaryVideo);
                 currentFullscreenVideoElement = primaryVideo;
                 document.documentElement.classList.add('WEB_BROWSER_MEDIA_REMOTE_CONTROL_IS_FULLSCREEN');
+
+                fullscreenVideoMutationObserver = new MutationObserver((mutationsList, observer) => {
+                    for (const mutation of mutationsList) {
+                        if (mutation.type === 'attributes') {
+                            if (mutation.attributeName === 'style') {
+                                if (primaryVideo.getAttribute('style') !== '') {
+                                    fullscreenVideoOldStyles = primaryVideo.getAttribute('style');
+                                    primaryVideo.style = '';
+                                }
+                            }
+                        }
+                    }
+                });
+                fullscreenVideoMutationObserver.observe(primaryVideo, { attributes: true })
             } catch (error) {
                 console.error(error);
             }
@@ -445,5 +663,16 @@ function onTogglePrimaryVideoFullscreen() {
 addCss(`
     html.WEB_BROWSER_MEDIA_REMOTE_CONTROL_IS_FULLSCREEN, html.WEB_BROWSER_MEDIA_REMOTE_CONTROL_IS_FULLSCREEN > body {
         overflow: hidden !important;
+    }
+    #WEB_BROWSER_MEDIA_REMOTE_CONTROL_FULLSCREEN_VIDEO_CONTAINER > video,
+    #WEB_BROWSER_MEDIA_REMOTE_CONTROL_FULLSCREEN_VIDEO_CONTAINER > iframe {
+        display: block !important;
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        bottom: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
     }
 `);

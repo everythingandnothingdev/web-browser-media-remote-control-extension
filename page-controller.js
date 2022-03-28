@@ -392,8 +392,11 @@ function getPrimaryVideoInfo() {
     let largestElement = null;
     let largestSize = -1;
 
-    if (currentFullscreenVideoElement) {
-        return currentFullscreenVideoElement;
+    if (currentFullscreenVideoElement && currentFullscreenVideoElement.tagName === 'VIDEO') {
+        return {
+            video: currentFullscreenVideoElement,
+            size: Infinity
+        };
     }
 
     document.querySelectorAll('video').forEach((element) => {
